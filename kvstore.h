@@ -23,7 +23,7 @@ inline void encodeBytes(Buffer& buffer, const std::string& str) {
 }
 
 inline uint32_t decodeLength(const Buffer& buffer, size_t& offset) {
-    if (offset + 4 > buffer.size()) throw std::runtime_error("Buffer underflow");
+    if (offset + 4 > buffer.size()) throw std::runtime_error("underflow");
     uint32_t length = 0;
     length |= (static_cast<uint32_t>(buffer[offset + 0]) << 24);
     length |= (static_cast<uint32_t>(buffer[offset + 1]) << 16);
@@ -34,7 +34,7 @@ inline uint32_t decodeLength(const Buffer& buffer, size_t& offset) {
 }
 
 inline std::string decodeBytes(const Buffer& buffer, size_t& offset, uint32_t length) {
-    if (offset + length > buffer.size()) throw std::runtime_error("Buffer underflow");
+    if (offset + length > buffer.size()) throw std::runtime_error("underflow");
     std::string str;
     for (size_t i = 0; i < length; ++i) {
         str += static_cast<char>(buffer[offset + i]);
@@ -81,7 +81,7 @@ public:
       
         walFile.open(walFileName, std::ios::out | std::ios::app | std::ios::binary);
         if (!walFile.is_open()) {
-            std::cerr << "Failed to open WAL file!" << std::endl;
+            std::cerr << "not opened" << std::endl;
         }
     }
 
@@ -199,16 +199,15 @@ public:
     }
 
     void displayList() {
-        std::cout << "\n--- Current Database State ---\n";
+        std::cout << "current db";
         for (int i = 0; i <= currentLevel; i++) {
             Node* node = head->forward[i];
-            std::cout << "Level " << i << ": ";
+            std::cout << "level " << i << ":";
             while (node != nullptr) {
-                std::cout << "[" << node->key << ":" << node->value << "] -> ";
+                std::cout << node->key << " " << node->value <<'\n';
                 node = node->forward[i];
             }
-            std::cout << "NULL\n";
         }
-        std::cout << "------------------------------\n";
+       
     }
 };
