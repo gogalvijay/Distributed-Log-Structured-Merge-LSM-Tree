@@ -1,0 +1,163 @@
+📚 The Resource List (Get these ready)
+
+    [DDIA]: Designing Data-Intensive Applications by Martin Kleppmann.
+
+    [DB-INT]: Database Internals by Alex Petrov.
+
+    [CMU-VIDEO]: CMU 15-445/645 Intro to Database Systems (Available on YouTube, Andy Pavlo).
+
+    [PAPERS]: Specific academic papers (PDFs available online).
+
+Phase 1: The In-Memory Engine (Days 1–5)
+
+Theme: Understanding why we don't just use a Python Dictionary.
+
+Day 1: The LSM Tree Architecture & Skip Lists
+
+    📖 Read: [DDIA] Chapter 3 (read only sections: "Hash Indexes", "SSTables and LSM-Trees").
+
+    📄 Paper: Skip Lists: A Probabilistic Alternative to Balanced Trees (William Pugh). Read pages 1–4 to understand the algorithm.
+
+    💻 Code: Implement a SkipList class in C++. It should support Insert and Search.
+
+        Why: Skip Lists are easier to implement concurrency for than Red-Black trees.
+
+Day 2: Binary Encoding & Serializing Data
+
+    📖 Read: [DB-INT] Chapter 2 (B-Tree Basics). Wait, why B-Trees? Read the first few pages to understand how databases view "blocks" and "pages" versus simple files.
+
+    📄 Resource: Google Protocol Buffers Encoding Guide (Online). You won't use ProtoBufs, but read their "Base 128 Varints" section. It teaches you how to save space when storing integers.
+
+    💻 Code: Create a binary format for your keys. Don't write strings like "key:value". Write [KeyLength][KeyBytes][ValueLength][ValueBytes].
+
+Day 3: The Write-Ahead Log (WAL)
+
+    📺 Watch: [CMU-VIDEO] Lecture 04: Database Storage (Part II). Focus on the "Log-Structured Storage" section.
+
+    📖 Read: [DB-INT] Chapter 6 (Variant: Write-Ahead Log).
+
+    💻 Code: Implement the WAL. Before inserting into your SkipList, append the binary data to a wal.log file.
+
+Day 4: Crash Recovery
+
+    📖 Read: RocksDB Wiki: Write Ahead Log (GitHub). Read the "Recovery" section.
+
+    💻 Code: Write a Recover() function. On startup, read wal.log, parse the entries, and re-insert them into the SkipList.
+
+Day 5: Testing & Durability
+
+    📄 Paper: Simple Testing Can Prevent Most Critical Failures (OSDI '14). Skim the introduction.
+
+    💻 Code: Write a test script. 1. Insert 100 keys. 2. kill -9 your program. 3. Restart. 4. Assert all 100 keys exist.
+
+Phase 2: Disk Persistence & SSTables (Days 6–10)
+
+Theme: Moving from RAM (volatile) to Disk (permanent & large).
+
+Day 6: SSTable Structure
+
+    📖 Read: [DDIA] Chapter 3 (Review the "Constructing and maintaining SSTables" section).
+
+    📄 Paper: Bigtable: A Distributed Storage System for Structured Data. Read Section 5.3 and 5.4.
+
+    💻 Code: Implement Flush(). Write your in-memory SkipList to a file named L0_001.sst.
+
+Day 7: Sparse Indexing
+
+    📖 Read: [DB-INT] Chapter 7 (Log-Structured Storage). Focus on "SSTable Attached Index".
+
+    💻 Code: As you write the SSTable, keep every 100th key in a separate index block in memory with its file offset.
+
+Day 8: The Read Path (Merging Views)
+
+    📺 Watch: [CMU-VIDEO] Lecture 05: Buffer Pools. (Understanding how pages are fetched).
+
+    💻 Code: Implement Get(key). Logic: Check SkipList (MemTable) → Check Sparse Index → Jump to offset in file → Scan file.
+
+Day 9: The Manifest (Metadata)
+
+    📖 Read: LevelDB Implementation Notes (Online). Section "Files".
+
+    💻 Code: Create a MANIFEST file that tracks which SSTable files belong to which "Level" (e.g., Level 0).
+
+Day 10: Compaction Theory
+
+    📖 Read: [DB-INT] Chapter 7. Section on "Compaction Strategies" (Leveled vs. Size-Tiered).
+
+    💻 Code: No new features. Refactor your code to cleanly separate StorageEngine, MemTable, and SSTableManager classes.
+
+Phase 3: Optimizations (Days 11–15)
+
+Theme: This is where you get the "Gold" resume points.
+
+Day 11: Bloom Filters
+
+    📄 Paper: Space/Time Trade-offs in Hash Coding with Allowable Errors (Burton Bloom). Read the abstract and the math logic.
+
+    📺 Watch: Bloom Filters - Introduction and Implementation (Any good CS YouTube tutorial, e.g., Hussein Nasser).
+
+    💻 Code: Add a Bloom Filter to the header of your SSTable.
+
+Day 12: Memory Mapped Files (mmap)
+
+    📖 Read: Linux Man Page for mmap.
+
+    📖 Read: Systems Performance by Brendan Gregg (Optional, or just search "Why mmap is faster for DBs").
+
+    💻 Code: Replace standard fstream reads with mmap for your SSTables.
+
+Day 13: Compaction Implementation
+
+    📖 Read: RocksDB Wiki: Leveled Compaction.
+
+    💻 Code: Implement a background thread that wakes up, finds two SSTables with overlapping key ranges, and merges them.
+
+Day 14: Caching (Block Cache)
+
+    📖 Read: [DB-INT] Chapter 5 (Buffer Management).
+
+    💻 Code: Implement a simple LRU (Least Recently Used) cache. When reading a block from disk, store it here.
+
+Day 15: Handling Deletes (Tombstones)
+
+    📖 Read: [DDIA] Chapter 3 (Section on "Deletes and Tombstones").
+
+    💻 Code: Update your compaction logic to physically remove keys that have a "Tombstone" marker.
+
+Phase 4: Polish & Deploy (Days 16–20)
+
+Theme: Making it a product.
+
+Day 16: Concurrency Control
+
+    📺 Watch: [CMU-VIDEO] Lecture 16: Concurrency Control Theory.
+
+    💻 Code: Ensure your Get and Put are thread-safe using std::shared_mutex (Read-Write locks).
+
+Day 17: Networking
+
+    📖 Read: Beej's Guide to Network Programming (The classic for C++ networking).
+
+    💻 Code: Wrap your engine in a simple TCP server.
+
+Day 18: API Design
+
+    💻 Code: Define a protocol. e.g., First byte 1 = Put, 2 = Get.
+
+Day 19: Benchmarking
+
+    📖 Read: The LSM-Tree Paper (Patrick O'Neil). Look at how they measured performance.
+
+    💻 Code: Write a script to hammer your DB. Graph the "Write Amplification" (How much data is written to disk vs. how much user data was inserted).
+
+Day 20: Documentation
+
+    Task: Write the README.
+
+        Structure: Architecture Diagram (draw it!) -> Features -> How to Run -> Performance Benchmark results.
+
+Summary of books to buy/find:
+
+    Designing Data-Intensive Applications (DDIA) (Priority #1)
+
+    Database Internals (Priority #2)
