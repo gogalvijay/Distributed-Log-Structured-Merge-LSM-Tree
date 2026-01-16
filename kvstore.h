@@ -7,6 +7,7 @@
 #include <cstring>
 #include <cstdint>
 
+
 using Buffer = std::vector<uint8_t>;
 
 inline void encodeLength(Buffer& buffer, uint32_t length) {
@@ -45,7 +46,6 @@ inline std::string decodeBytes(const Buffer& buffer, size_t& offset, uint32_t le
 
 const int MAX_LEVEL = 6;
 
-
 struct Node {
     std::string key;   
     std::string value; 
@@ -65,23 +65,22 @@ struct Node {
     }
 };
 
-
 class KVStore {
 private:
     Node* head;
     int currentLevel;
     std::ofstream walFile; 
     const std::string walFileName = "wal.log";
+    int sstCounter = 1; 
 
 public:
     KVStore() {
         currentLevel = 0;
         head = new Node("", "", MAX_LEVEL); 
         
-      
         walFile.open(walFileName, std::ios::out | std::ios::app | std::ios::binary);
         if (!walFile.is_open()) {
-            std::cerr << "not opened" << std::endl;
+            std::cerr << "wal not opened" << std::endl;
         }
     }
 
@@ -89,6 +88,7 @@ public:
         if (walFile.is_open()) {
             walFile.close();
         }
+       
         Node* curr = head->forward[0];
         while (curr != nullptr) {
             Node* next = curr->forward[0];
@@ -107,6 +107,7 @@ public:
     }
 
     void put(std::string key, std::string value) {
+        
         Buffer logEntry;
         encodeLength(logEntry, key.size());
         encodeBytes(logEntry, key);
@@ -117,6 +118,8 @@ public:
             walFile.write(reinterpret_cast<const char*>(logEntry.data()), logEntry.size());
             walFile.flush(); 
         }
+
+        
         insertInMemory(key, value);
     }
 
@@ -172,7 +175,6 @@ public:
     void recover() {
         std::ifstream inFile(walFileName, std::ios::in | std::ios::binary);
         if (!inFile.is_open()) {
-           
             return;
         }
 
@@ -180,8 +182,6 @@ public:
         inFile.close();
 
         size_t offset = 0;
-        int recordsRecovered = 0;
-
         while (offset < fileData.size()) {
             try {
                 uint32_t keyLen = decodeLength(fileData, offset);
@@ -190,24 +190,51 @@ public:
                 std::string val = decodeBytes(fileData, offset, valLen);
 
                 insertInMemory(key, val);
-                recordsRecovered++;
             } catch (const std::exception& e) {
                 break;
             }
         }
-       
+    }
+
+    
+    void flush() {
+        
+        std::string sstFileName = "L0_00" + std::to_string(sstCounter) + ".sst";
+        
+        std::ofstream sstFile(sstFileName, std::ios::out | std::ios::binary);
+        if (!sstFile.is_open()) {
+            std::cerr << "Failed to open SSTable file for writing." << std::endl;
+            return;
+        }
+
+        std::cout << "Flushing MemTable to " << sstFileName << "...\n";
+
+        
+        Node* current = head->forward[0];
+        while (current != nullptr) {
+            Buffer entry;
+            encodeLength(entry, current->key.size());
+            encodeBytes(entry, current->key);
+            encodeLength(entry, current->value.size());
+            encodeBytes(entry, current->value);
+
+            sstFile.write(reinterpret_cast<const char*>(entry.data()), entry.size());
+            
+            current = current->forward[0];
+        }
+
+        sstFile.close();
+        sstCounter++;
+
+        
     }
 
     void displayList() {
-        std::cout << "current db";
-        for (int i = 0; i <= currentLevel; i++) {
-            Node* node = head->forward[i];
-            std::cout << "level " << i << ":";
-            while (node != nullptr) {
-                std::cout << node->key << " " << node->value <<'\n';
-                node = node->forward[i];
-            }
+        std::cout << "current db:\n";
+        Node* node = head->forward[0]; 
+        while (node != nullptr) {
+            std::cout << node->key << " : " << node->value << '\n';
+            node = node->forward[0];
         }
-       
     }
 };

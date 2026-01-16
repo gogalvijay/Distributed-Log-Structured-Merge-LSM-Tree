@@ -19,10 +19,14 @@ int main() {
 
 
     std::string result = db.get("user:101");
-    std::cout << "found user:101" << result << std::endl;
+    std::cout<<"found user:101"<<result<<'\n';
 
     
     db.displayList();
+    
+    db.flush();   
+    
+    std::cout<<"written to disk successfully"<<'\n';
 
     return 0;
 }
