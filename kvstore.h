@@ -6,9 +6,17 @@
 #include <ctime>
 #include <cstring>
 #include <cstdint>
+#include <filesystem> 
 
 
 using Buffer = std::vector<uint8_t>;
+
+struct IndexEntry {
+    std::string key;
+    uint64_t offset;
+};
+
+std::vector<IndexEntry> sparseIndex;
 
 inline void encodeLength(Buffer& buffer, uint32_t length) {
     buffer.push_back(static_cast<uint8_t>((length >> 24) & 0xFF));
@@ -82,6 +90,21 @@ public:
         if (!walFile.is_open()) {
             std::cerr << "wal not opened" << std::endl;
         }
+        
+        int maxCounter = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(".")) {
+		std::string filename = entry.path().filename().string();
+		if (filename.find("L0_00") == 0 && filename.find(".sst") != std::string::npos) {
+		    try {
+		        int num = std::stoi(filename.substr(5, 3));
+		        if (num > maxCounter) maxCounter = num;
+		    } 
+		    catch (...) {
+		    }
+		}
+        }
+        sstCounter = maxCounter + 1;
+        
     }
 
     ~KVStore() {
@@ -194,21 +217,21 @@ public:
                 break;
             }
         }
+        
+        
     }
 
     
     void flush() {
-        
         std::string sstFileName = "L0_00" + std::to_string(sstCounter) + ".sst";
-        
         std::ofstream sstFile(sstFileName, std::ios::out | std::ios::binary);
-        if (!sstFile.is_open()) {
-            std::cerr << "Failed to open SSTable file for writing." << std::endl;
-            return;
-        }
+        
+        if (!sstFile.is_open()) return;
 
-        std::cout << "Flushing MemTable to " << sstFileName << "...\n";
-
+        sparseIndex.clear(); 
+        uint64_t currentOffset = 0;
+        int entryCount = 0;         
+        int SPARSE_FACTOR = 3; 
         
         Node* current = head->forward[0];
         while (current != nullptr) {
@@ -218,17 +241,38 @@ public:
             encodeLength(entry, current->value.size());
             encodeBytes(entry, current->value);
 
+           
+            if (entryCount % SPARSE_FACTOR == 0) {
+                sparseIndex.push_back({current->key, currentOffset});
+            }
+
             sstFile.write(reinterpret_cast<const char*>(entry.data()), entry.size());
-            
+            currentOffset += entry.size();
+            entryCount++;
             current = current->forward[0];
         }
 
+       
+        uint64_t indexStartOffset = currentOffset; 
+        
+        for (const auto& idx : sparseIndex) {
+            Buffer idxEntry;
+            encodeLength(idxEntry, idx.key.size());
+            encodeBytes(idxEntry, idx.key);
+            
+            encodeLength(idxEntry, (uint32_t)idx.offset); 
+            
+            sstFile.write(reinterpret_cast<const char*>(idxEntry.data()), idxEntry.size());
+        }
+
+       
+        Buffer footer;
+        encodeLength(footer, (uint32_t)indexStartOffset);
+        sstFile.write(reinterpret_cast<const char*>(footer.data()), footer.size());
+
         sstFile.close();
         sstCounter++;
-
-        
     }
-
     void displayList() {
         std::cout << "current db:\n";
         Node* node = head->forward[0]; 
