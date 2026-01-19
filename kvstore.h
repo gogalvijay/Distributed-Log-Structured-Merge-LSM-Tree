@@ -6,17 +6,20 @@
 #include <ctime>
 #include <cstring>
 #include <cstdint>
-#include <filesystem> 
-
+#include <filesystem>
+#include <algorithm>
 
 using Buffer = std::vector<uint8_t>;
 
 struct IndexEntry {
     std::string key;
-    uint64_t offset;
+    uint32_t offset;
 };
 
-std::vector<IndexEntry> sparseIndex;
+struct SSTableMetadata {
+    std::string filename;
+    std::vector<IndexEntry> sparseIndex;
+};
 
 inline void encodeLength(Buffer& buffer, uint32_t length) {
     buffer.push_back(static_cast<uint8_t>((length >> 24) & 0xFF));
@@ -79,32 +82,22 @@ private:
     int currentLevel;
     std::ofstream walFile; 
     const std::string walFileName = "wal.log";
+    const std::string manifestFileName = "MANIFEST";
     int sstCounter = 1; 
+    std::vector<SSTableMetadata> sstables;
 
 public:
     KVStore() {
         currentLevel = 0;
         head = new Node("", "", MAX_LEVEL); 
         
+        recover();
+        loadManifest();
+
         walFile.open(walFileName, std::ios::out | std::ios::app | std::ios::binary);
         if (!walFile.is_open()) {
             std::cerr << "wal not opened" << std::endl;
         }
-        
-        int maxCounter = 0;
-        for (const auto& entry : std::filesystem::directory_iterator(".")) {
-		std::string filename = entry.path().filename().string();
-		if (filename.find("L0_00") == 0 && filename.find(".sst") != std::string::npos) {
-		    try {
-		        int num = std::stoi(filename.substr(5, 3));
-		        if (num > maxCounter) maxCounter = num;
-		    } 
-		    catch (...) {
-		    }
-		}
-        }
-        sstCounter = maxCounter + 1;
-        
     }
 
     ~KVStore() {
@@ -121,6 +114,74 @@ public:
         delete head;
     }
 
+    void loadManifest() {
+        std::ifstream manifest(manifestFileName);
+        if (!manifest.is_open()) return;
+
+        std::string filename;
+        int maxNum = 0;
+
+        while (std::getline(manifest, filename)) {
+            if (filename.empty()) continue;
+            loadSSTableIndex(filename);
+
+            try {
+                int num = std::stoi(filename.substr(5, 3));
+                if (num > maxNum) maxNum = num;
+            } catch(...) {}
+        }
+        sstCounter = maxNum + 1;
+        manifest.close();
+    }
+
+    void appendToManifest(const std::string& filename) {
+        std::ofstream manifest(manifestFileName, std::ios::app);
+        if (manifest.is_open()) {
+            manifest << filename << "\n";
+            manifest.close();
+        }
+    }
+
+    void loadSSTableIndex(const std::string& filename) {
+        std::ifstream file(filename, std::ios::binary | std::ios::ate);
+        if (!file.is_open()) return;
+
+        std::streampos fileSize = file.tellg();
+        if (fileSize < 4) return; 
+
+        file.seekg(-4, std::ios::end);
+        char buffer[4];
+        file.read(buffer, 4);
+        
+        Buffer lenBuf(4);
+        memcpy(lenBuf.data(), buffer, 4);
+        size_t dummyOffset = 0;
+        uint32_t indexOffset = decodeLength(lenBuf, dummyOffset);
+
+        file.seekg(indexOffset);
+        std::vector<uint8_t> indexData;
+        size_t indexSize = (size_t)fileSize - 4 - indexOffset;
+        indexData.resize(indexSize);
+        file.read(reinterpret_cast<char*>(indexData.data()), indexSize);
+
+        SSTableMetadata meta;
+        meta.filename = filename;
+        size_t parseOffset = 0;
+        while (parseOffset < indexData.size()) {
+            try {
+                uint32_t keyLen = decodeLength(indexData, parseOffset);
+                std::string key = decodeBytes(indexData, parseOffset, keyLen);
+                uint32_t offsetVal = decodeLength(indexData, parseOffset);
+                meta.sparseIndex.push_back({key, offsetVal});
+            } catch (...) {
+                break;
+            }
+        }
+        
+        sstables.push_back(meta);
+        file.close();
+    }
+
     int randomLevel() {
         int lvl = 0;
         while ((rand() % 2) == 1 && lvl < MAX_LEVEL) {
@@ -130,7 +191,6 @@ public:
     }
 
     void put(std::string key, std::string value) {
-        
         Buffer logEntry;
         encodeLength(logEntry, key.size());
         encodeBytes(logEntry, key);
@@ -141,8 +201,6 @@ public:
             walFile.write(reinterpret_cast<const char*>(logEntry.data()), logEntry.size());
             walFile.flush(); 
         }
-
-        
         insertInMemory(key, value);
     }
 
@@ -189,10 +247,62 @@ public:
         current = current->forward[0];
 
         if (current != nullptr && current->key == key) {
-            return current->value;
-        } else {
+            return current->value; 
+        } 
+
+        for (int i = sstables.size() - 1; i >= 0; i--) {
+            std::string res = searchInSSTable(sstables[i], key);
+            if (!res.empty()) return res;
+        }
+
+        return ""; 
+    }
+
+    std::string searchInSSTable(const SSTableMetadata& meta, const std::string& key) {
+        if (meta.sparseIndex.empty()) return "";
+
+        auto it = std::lower_bound(meta.sparseIndex.begin(), meta.sparseIndex.end(), key,
+            [](const IndexEntry& entry, const std::string& val) {
+                return entry.key < val;
+            });
+
+        uint32_t searchOffset = 0;
+
+        if (it != meta.sparseIndex.end() && it->key == key) {
+            searchOffset = it->offset;
+        } 
+        else if (it != meta.sparseIndex.begin()) {
+            it--;
+            searchOffset = it->offset;
+        } 
+        else {
             return ""; 
         }
+
+        std::ifstream file(meta.filename, std::ios::binary);
+        if (!file.is_open()) return "";
+
+        file.seekg(searchOffset);
+
+        Buffer buffer((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        size_t offset = 0;
+
+        while (offset < buffer.size()) {
+            try {
+                uint32_t kLen = decodeLength(buffer, offset);
+                std::string k = decodeBytes(buffer, offset, kLen);
+                uint32_t vLen = decodeLength(buffer, offset);
+                std::string v = decodeBytes(buffer, offset, vLen);
+
+                if (k == key) return v;
+                if (k > key) break; 
+
+            } catch (...) {
+                break; 
+            }
+        }
+
+        return "";
     }
 
     void recover() {
@@ -217,18 +327,15 @@ public:
                 break;
             }
         }
-        
-        
     }
 
-    
     void flush() {
         std::string sstFileName = "L0_00" + std::to_string(sstCounter) + ".sst";
         std::ofstream sstFile(sstFileName, std::ios::out | std::ios::binary);
         
         if (!sstFile.is_open()) return;
 
-        sparseIndex.clear(); 
+        std::vector<IndexEntry> currentSSTIndex;
         uint64_t currentOffset = 0;
         int entryCount = 0;         
         int SPARSE_FACTOR = 3; 
@@ -241,9 +348,8 @@ public:
             encodeLength(entry, current->value.size());
             encodeBytes(entry, current->value);
 
-           
             if (entryCount % SPARSE_FACTOR == 0) {
-                sparseIndex.push_back({current->key, currentOffset});
+                currentSSTIndex.push_back({current->key, (uint32_t)currentOffset});
             }
 
             sstFile.write(reinterpret_cast<const char*>(entry.data()), entry.size());
@@ -252,29 +358,41 @@ public:
             current = current->forward[0];
         }
 
-       
         uint64_t indexStartOffset = currentOffset; 
         
-        for (const auto& idx : sparseIndex) {
+        for (const auto& idx : currentSSTIndex) {
             Buffer idxEntry;
             encodeLength(idxEntry, idx.key.size());
             encodeBytes(idxEntry, idx.key);
-            
-            encodeLength(idxEntry, (uint32_t)idx.offset); 
-            
+            encodeLength(idxEntry, idx.offset); 
             sstFile.write(reinterpret_cast<const char*>(idxEntry.data()), idxEntry.size());
         }
 
-       
         Buffer footer;
         encodeLength(footer, (uint32_t)indexStartOffset);
         sstFile.write(reinterpret_cast<const char*>(footer.data()), footer.size());
 
         sstFile.close();
+
+        appendToManifest(sstFileName);
+        sstables.push_back({sstFileName, currentSSTIndex});
+
+        Node* wipe = head->forward[0];
+        while (wipe != nullptr) {
+            Node* next = wipe->forward[0];
+            delete wipe;
+            wipe = next;
+        }
+        for(int i=0; i<=MAX_LEVEL; i++) head->forward[i] = nullptr;
+        currentLevel = 0;
+        
+        walFile.close();
+        walFile.open(walFileName, std::ios::out | std::ios::trunc | std::ios::binary); 
+
         sstCounter++;
     }
+
     void displayList() {
-        std::cout << "current db:\n";
         Node* node = head->forward[0]; 
         while (node != nullptr) {
             std::cout << node->key << " : " << node->value << '\n';
