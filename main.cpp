@@ -5,37 +5,34 @@
 int main() {
     srand(time(0));
 
-    {
-        std::cout << "--- Session 1 ---\n";
-        KVStore db;
-        
-        db.put("apple", "red");
-        db.put("banana", "yellow");
-        db.put("grape", "purple");
-        db.put("zebra", "stripe");
+    std::cout << "--- LSM Tree Test (Day 15) ---\n";
+    KVStore db;
 
-        std::cout << "Flushing to disk...\n";
-        db.flush();
+    // 1. Initial Puts
+    db.put("user:1", "Alice");
+    db.put("user:2", "Bob");
+    db.put("user:3", "Charlie");
+    std::cout << "Flushing L0_001...\n";
+    db.flush();
 
-        db.put("mango", "green_ram_only");
-    }
+    // 2. Delete and Update
+    db.del("user:2");
+    db.put("user:3", "Charlie_Updated");
+    std::cout << "Flushing L0_002 (with Tombstone)...\n";
+    db.flush();
 
-    std::cout << "\n--- Session 2 (Recovery) ---\n";
-    {
-        KVStore db;
-        
-        std::string v1 = db.get("banana");
-        std::cout << "Get 'banana' (from SST): " << v1 << "\n";
+    // 3. Check logical state
+    std::cout << "Read user:1 (Expected Alice): " << db.get("user:1") << "\n";
+    std::cout << "Read user:2 (Expected Deleted/Empty): " << db.get("user:2") << "\n";
+    std::cout << "Read user:3 (Expected Updated): " << db.get("user:3") << "\n";
 
-        std::string v2 = db.get("mango");
-        std::cout << "Get 'mango' (from WAL): " << v2 << "\n";
+    // 4. Compaction
+    std::cout << "\nRunning Compaction (Physical Removal)...\n";
+    db.compact();
 
-        std::string v3 = db.get("apple");
-        std::cout << "Get 'apple' (from SST): " << v3 << "\n";
-        
-        std::string v4 = db.get("nothing");
-        std::cout << "Get 'nothing': " << (v4.empty() ? "not found" : v4) << "\n";
-    }
+    std::cout << "Post-Compaction Check:\n";
+    std::cout << "Read user:1: " << db.get("user:1") << "\n";
+    std::cout << "Read user:2: " << (db.get("user:2").empty() ? "Verified Gone" : "Error") << "\n";
 
     return 0;
 }
